@@ -7,9 +7,14 @@ local errHandler = require("try-catch-finally");
 local requests   = require("requests");
 local inspect    = require("inspect");
 local List       = require("list");
+local siteConfig = require("luarocks.site_config");
+
+local __version__ = "0.1.0";
 
 local config = {};
 local speedtestConfigUrl = "://www.speedtest.net/speedtest-config.php";
+local system = nil;
+local proc = nil;
 
 local function BuildRequest(url, data, header, bump, secure)
     --[[
@@ -94,6 +99,16 @@ local function StrSplit(inputStr, sep)
     return tab;
 end
 
+local function FindLast(haystack, needle)
+    -- Find the last index of character in the string
+    local i = string.match(haystack, ".*"..needle.."()");
+    if i == nil then
+        return nil 
+    else 
+        return i-1 
+    end
+end
+
 local function GetConfig()
     --[[
         Download the speedtest.net configuration and return only the data
@@ -167,6 +182,7 @@ local function ParseObtainedServers(config, passRes, storedServers)
         Parse all obtained servers, exclude the ignore ones and
         store them in a new table
     ]]
+    -- Add the status_code check to avoid "Segmentation fault: 11" 
     if passRes["response"].status_code ~= 200 then
         return;
     end
@@ -222,7 +238,17 @@ local function GetServers(config)
 end
 
 local function BuildUserAgent()
-    -- Build a Mozilla/5.0 compatible User-Agent string
+    --[[
+        Build a Mozilla/5.0 compatible User-Agent string
+        Currently, useAgent info is hard coded, will imporve
+        it later
+    --]]
+    local name = "speedtest-lua";
+    local versionInfo = string.format("%s/%s", name, __version__);
+    local systemInfo = string.format("%s; U; %s; en-us", system, proc);
+    local userAgent = "Mozilla/5.0 "..systemInfo.." ".._VERSION.." "
+        .."(KHTML, like Gecko) "..versionInfo;
+    return userAgent;
 end
 
 local function GetClosestServers(servers, limit)
@@ -243,16 +269,82 @@ local function GetClosestServers(servers, limit)
     return closest;
 end
 
+local function TestConnection(url, passRes)
+    local start = os.clock();
+    passRes["response"] = requests.request("GET", url, headers);
+    local diff = (os.clock() - start)*1000*1000;
+    table.insert(passRes["diffTime"], diff);
+end
+
 local function GetBestServer(servers) 
     --[[
         Perform a speedtest.net "ping" to determine which speedtest.net
         server has the lowest latency
     --]]
     local closestServers = GetClosestServers(servers);
+    local userAgent = BuildUserAgent();
+    local results = {};
 
+    for _, server in ipairs(closestServers) do
+        local lastIndex = FindLast(server["url"], "/");
+        if lastIndex ~= nil then
+            local url = string.sub(server["url"], 1, lastIndex-1);
+            local stamp = os.time()*1000;
+            local latencyUrl = string.format("%s/latency.txt?x=%s",
+                url, stamp);
+            local cum = {};
+            for i = 0, 2 do
+                local thisLatencyUrl = string.format("%s.%s", latencyUrl, i);
+                local passRes = { ["diffTime"] = {} };
+                errHandler
+                .try(TestConnection, thisLatencyUrl, passRes)
+                .catch(
+                    function (ex)
+                        table.insert(cum, 3600);
+                        print(ex);
+                    end
+                )
+                local text = string.sub(passRes["response"].text,1,9);
+                if passRes["response"].status_code == 200 and
+                text == "test=test" then
+                    table.insert(cum, passRes["diffTime"][1]);
+                else
+                    table.insert(cum, 3600);
+                end
+            end
+            local ave = 0;
+            for _, value in ipairs(cum) do
+                ave = ave + value;
+            end
+            ave = ave / 3;
+            results[ave] = server;
+        end
+    end
+    local keyTable = {};
+    for key, _ in pairs(results) do
+        table.insert(keyTable, key);
+    end
+    table.sort(keyTable);
+    print("Best server average ping is:"..keyTable[1].."ms");
+    return results[keyTable[1]];
+end
+
+local function SystemDetection()
+    --[[
+        Detect the system info
+        Currently, it depends on luarocks
+    --]]
+    system = siteConfig.LUAROCKS_UNAME_S or io.popen("uname -s"):read("*l");
+    proc = siteConfig.LUAROCKS_UNAME_M or io.popen("uname -m"):read("*l");
+    if proc:match("i[%d]86") then
+        proc = "32bit"
+    elseif proc:match("amd64") or proc:match("x86_64") then
+        proc = "64bit"
+    end
 end
 
 local function Shell()
+    SystemDetection();
     print("Retrieving speedtest.net configuration...");
     local config = GetConfig();
     print(string.format("Testing from %s (%s)...", config["client"]["isp"], 
@@ -260,7 +352,8 @@ local function Shell()
     print("Retrieving speedtest.net server list...");
     local servers = GetServers(config);
     print("Selecting best server based on ping...");
-    GetBestServer(servers);
+    local bestServer = GetBestServer(servers);
+    print(inspect(bestServer));
 end
 
 local function main()
@@ -273,7 +366,6 @@ local function main()
     .finally(function ()
         print("in finally");
     end)
-    -- print(os.getenv("OS"));
 
     print("main end");
 end
