@@ -343,17 +343,49 @@ local function SystemDetection()
     end
 end
 
+local function TestDownload(config, bestServer)
+    -- Test download speed against speedtest.net
+    local urls = {};
+    local requests = {};
+    for _, size in ipairs(config["sizes"]["download"]) do
+        for index = 1, config["counts"]["download"] do
+            local lastIndex = FindLast(bestServer["url"], "/");
+            if lastIndex ~= nil then
+                local bestUrl = string.sub(bestServer["url"], 1, lastIndex-1);
+                local url = string.format("%s/random%sx%s.jpg", 
+                    bestUrl, size, size);
+                local finalUrl, header = BuildRequest(url, nil, nil, index-1);
+                local request = { ["url"] = finalUrl, ["header"] = header };
+                table.insert(urls, url);
+                table.insert(requests, request);
+            end
+        end
+    end
+    
+    local requestCount = #urls;
+    -- local requests = {};
+    -- for _, url in iparis(urls) do
+    -- end
+    print("urls size is "..#urls);
+    print("requests size is "..#requests);
+    print(inspect(requests));
+end
+
 local function Shell()
     SystemDetection();
     print("Retrieving speedtest.net configuration...");
     local config = GetConfig();
-    print(string.format("Testing from %s (%s)...", config["client"]["isp"], 
-        config["client"]["ip"]));
-    print("Retrieving speedtest.net server list...");
-    local servers = GetServers(config);
-    print("Selecting best server based on ping...");
-    local bestServer = GetBestServer(servers);
-    print(inspect(bestServer));
+    print(inspect(config));
+    -- print(string.format("Testing from %s (%s)...", config["client"]["isp"], 
+    --     config["client"]["ip"]));
+    -- print("Retrieving speedtest.net server list...");
+    -- local servers = GetServers(config);
+    -- print("Selecting best server based on ping...");
+    -- local bestServer = GetBestServer(servers);
+    -- print(inspect(bestServer));
+    -- print("Testing download speed");
+    -- TestDownload(config, bestServer);
+
 end
 
 local function main()
